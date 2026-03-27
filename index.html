@@ -1404,6 +1404,7 @@ function App(){
   const[state,dispatch]=useReducer(reducer,INIT);
   const[viewAsClient,setViewAsClient]=useState(false);
   const[loading,setLoading]=useState(true);
+  const[supaOk,setSupaOk]=useState(null); // null=checking, true=ok, false=offline
   const stateRef=useRef(state);
   useEffect(()=>{stateRef.current=state;},[state]);
 
@@ -1416,9 +1417,26 @@ function App(){
           sb.from("orders").select("*").order("id"),
           sb.from("tickets").select("*").order("id")
         ]);
-        if(ue||oe||te)console.warn("Supabase load errors",ue,oe,te);
-        dispatch({type:"LOAD_DATA",users:users||[],orders:orders||[],tickets:tickets||[]});
-      }catch(e){console.warn("Supabase unavailable, using local state",e);}
+        if(ue||oe||te){
+          // Table errors — keep INIT state, mark offline
+          console.warn("Supabase errors (tabelas podem não existir):",ue||oe||te);
+          setSupaOk(false);
+        } else {
+          setSupaOk(true);
+          if((users||[]).length===0){
+            // Tabelas existem mas estão vazias — seed com dados iniciais
+            await Promise.all(INIT.users.map(u=>sb.from("users").upsert(u)));
+            await Promise.all(INIT.orders.map(o=>sb.from("orders").upsert({...o,files:[]})));
+            await Promise.all(INIT.tickets.map(t=>sb.from("tickets").upsert(t)));
+            // INIT state já está correto, não precisa fazer dispatch
+          } else {
+            dispatch({type:"LOAD_DATA",users:users||[],orders:orders||[],tickets:tickets||[]});
+          }
+        }
+      }catch(e){
+        console.warn("Supabase indisponível, usando estado local:",e);
+        setSupaOk(false);
+      }
       setLoading(false);
     })();
   },[]);
@@ -1472,9 +1490,15 @@ function App(){
       <span style={{color:"#94a3b8",fontSize:14,fontWeight:600,letterSpacing:".02em"}}>Carregando PageFlash...</span>
     </div>
   );
-  if(!state.currentUser)return<Auth state={state} dispatch={syncDispatch}/>;
-  if(state.isAdmin&&!viewAsClient)return<AdminPanel state={state} dispatch={syncDispatch} onViewAsClient={()=>setViewAsClient(true)}/>;
-  return<ClientPanel state={state} dispatch={syncDispatch} onBackToAdmin={state.isAdmin?()=>setViewAsClient(false):null}/>;
+  const supaBadge=(
+    <div style={{position:"fixed",bottom:16,right:16,zIndex:999,display:"flex",alignItems:"center",gap:6,background:"#fff",border:"1px solid #e2e8f0",borderRadius:99,padding:"5px 10px 5px 8px",boxShadow:"0 2px 12px rgba(0,0,0,.08)",fontSize:11,fontWeight:600,color:"#64748b",pointerEvents:"none"}}>
+      <div style={{width:7,height:7,borderRadius:"50%",background:supaOk===null?"#f59e0b":supaOk?"#22c55e":"#ef4444",boxShadow:supaOk===null?"0 0 6px rgba(245,158,11,.6)":supaOk?"0 0 6px rgba(34,197,94,.6)":"0 0 6px rgba(239,68,68,.6)"}}/>
+      {supaOk===null?"Conectando...":supaOk?"Supabase ativo":"Offline (local)"}
+    </div>
+  );
+  if(!state.currentUser)return<>{<Auth state={state} dispatch={syncDispatch}/>}{supaBadge}</>;
+  if(state.isAdmin&&!viewAsClient)return<>{<AdminPanel state={state} dispatch={syncDispatch} onViewAsClient={()=>setViewAsClient(true)}/>}{supaBadge}</>;
+  return<>{<ClientPanel state={state} dispatch={syncDispatch} onBackToAdmin={state.isAdmin?()=>setViewAsClient(false):null}/>}{supaBadge}</>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
