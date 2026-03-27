@@ -125,6 +125,8 @@ const{useState,useEffect,useReducer,useRef,useCallback}=React;
 
 /* ─── INITIAL STATE ─────────────────────────────────────── */
 const T=Date.now();
+const getSavedSession=()=>{try{return JSON.parse(localStorage.getItem("pf_session"))||null;}catch{return null;}};
+const _saved=getSavedSession();
 const INIT={
   users:[
     {id:1,name:"João Silva",email:"joao@pageflash.com",password:"123456",role:"client",createdAt:new Date(T-7*864e5).toISOString()},
@@ -135,14 +137,14 @@ const INIT={
     {id:2,number:"PF-0002",clientId:1,clientName:"João Silva",companyName:"Silva Marketing",email:"joao@pageflash.com",whatsapp:"(11) 99999-0001",niche:"Marketing Digital",objective:"Vender e-book de copywriting",copy:"Descubra as técnicas de copy que geram vendas todo dia. Oferta por tempo limitado.",visualStyle:"Clean, minimalista, branco e azul, tipografia grande",files:[],status:"Novo",createdAt:new Date(T-30*6e4).toISOString(),deliveryLink:"",htmlCode:"",internalNote:"",assigneeId:null}
   ],
   tickets:[{id:1,number:"TK-0001",clientId:1,clientName:"João Silva",subject:"Dúvida sobre prazo de entrega",message:"Olá! Gostaria de saber quando minha landing page ficará pronta. Já faz algumas horas desde o pedido PF-0001.",status:"Aberto",response:"",createdAt:new Date(T-2*36e5).toISOString()}],
-  nextOrderId:3,nextTicketId:2,nextUserId:3,currentUser:null,isAdmin:false
+  nextOrderId:3,nextTicketId:2,nextUserId:3,currentUser:_saved?.user||null,isAdmin:_saved?.isAdmin||false
 };
 
 function reducer(s,a){
   switch(a.type){
-    case"LOGIN_ADMIN":return{...s,currentUser:{id:0,name:"Admin",email:"admin@pageflash.com",role:"admin"},isAdmin:true};
-    case"LOGIN_CLIENT":return{...s,currentUser:a.user,isAdmin:a.user.role==="admin"};
-    case"LOGOUT":return{...s,currentUser:null,isAdmin:false};
+    case"LOGIN_ADMIN":{const u={id:0,name:"Admin",email:"admin@pageflash.com",role:"admin"};localStorage.setItem("pf_session",JSON.stringify({user:u,isAdmin:true}));return{...s,currentUser:u,isAdmin:true};}
+    case"LOGIN_CLIENT":{const admin=a.user.role==="admin";localStorage.setItem("pf_session",JSON.stringify({user:a.user,isAdmin:admin}));return{...s,currentUser:a.user,isAdmin:admin};}
+    case"LOGOUT":{localStorage.removeItem("pf_session");return{...s,currentUser:null,isAdmin:false};}
     case"REGISTER":{const u={id:s.nextUserId,...a.user,role:"client",createdAt:new Date().toISOString()};return{...s,users:[...s.users,u],currentUser:u,isAdmin:false,nextUserId:s.nextUserId+1};}
     case"CREATE_ORDER":{const num="PF-"+String(s.nextOrderId).padStart(4,"0");const o={id:s.nextOrderId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...a.order,status:a.order.needsQuote?"Orçamento":"Novo",createdAt:new Date().toISOString(),deliveryLink:"",htmlCode:"",internalNote:"",quote:"",quoteStatus:"",assigneeId:null};return{...s,orders:[...s.orders,o],nextOrderId:s.nextOrderId+1};}
     case"UPDATE_ORDER":return{...s,orders:s.orders.map(o=>o.id===a.id?{...o,...a.updates}:o)};
