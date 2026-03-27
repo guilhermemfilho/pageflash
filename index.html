@@ -8,6 +8,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   *{font-family:'Plus Jakarta Sans',sans-serif}
@@ -28,6 +29,7 @@
   @keyframes shimmer  {0%,100%{opacity:1}50%{opacity:.5}}
   @keyframes pulse-amber{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.35)}70%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}
   @keyframes pulse-red  {0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}}
+  @keyframes spin        {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   @keyframes float     {0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
   @keyframes tabSlide  {from{transform:scaleX(0)}to{transform:scaleX(1)}}
   @keyframes toastIn   {from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
@@ -119,7 +121,7 @@
 <body style="background:#f8fafc;color:#0f172a;min-height:100vh">
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useReducer,useRef}=React;
+const{useState,useEffect,useReducer,useRef,useCallback}=React;
 
 /* ─── INITIAL STATE ─────────────────────────────────────── */
 const T=Date.now();
@@ -149,9 +151,20 @@ function reducer(s,a){
     case"RESPOND_TICKET":return{...s,tickets:s.tickets.map(t=>t.id===a.id?{...t,response:a.response,status:"Respondido"}:t)};
     case"TOGGLE_ADMIN":return{...s,users:s.users.map(u=>u.id===a.id?{...u,role:u.role==="admin"?"client":"admin"}:u)};
     case"ADMIN_CREATE_USER":{const u={id:s.nextUserId,...a.user,createdAt:new Date().toISOString()};return{...s,users:[...s.users,u],nextUserId:s.nextUserId+1};}
+    case"LOAD_DATA":{
+      const maxO=a.orders.length?Math.max(...a.orders.map(o=>o.id))+1:s.nextOrderId;
+      const maxT=a.tickets.length?Math.max(...a.tickets.map(t=>t.id))+1:s.nextTicketId;
+      const maxU=a.users.length?Math.max(...a.users.map(u=>u.id))+1:s.nextUserId;
+      return{...s,users:a.users,orders:a.orders.map(o=>({...o,files:o.files||[]})),tickets:a.tickets,nextOrderId:maxO,nextTicketId:maxT,nextUserId:maxU};
+    }
     default:return s;
   }
 }
+
+/* ─── SUPABASE ───────────────────────────────────────────── */
+const SUPA_URL="https://unwzkfzgnxgehkhiblpm.supabase.co";
+const SUPA_KEY="sb_publishable_b5SkKNuTtiCyZvAxA6HmyQ_je73YOsO";
+const sb=supabase.createClient(SUPA_URL,SUPA_KEY);
 
 /* ─── UTILITIES ─────────────────────────────────────────── */
 const fmtDate=iso=>new Date(iso).toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
@@ -1287,9 +1300,74 @@ function AdminPanel({state,dispatch,onViewAsClient}){
 function App(){
   const[state,dispatch]=useReducer(reducer,INIT);
   const[viewAsClient,setViewAsClient]=useState(false);
-  if(!state.currentUser)return<Auth state={state} dispatch={dispatch}/>;
-  if(state.isAdmin&&!viewAsClient)return<AdminPanel state={state} dispatch={dispatch} onViewAsClient={()=>setViewAsClient(true)}/>;
-  return<ClientPanel state={state} dispatch={dispatch} onBackToAdmin={state.isAdmin?()=>setViewAsClient(false):null}/>;
+  const[loading,setLoading]=useState(true);
+  const stateRef=useRef(state);
+  useEffect(()=>{stateRef.current=state;},[state]);
+
+  /* Load data from Supabase on mount */
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const[{data:users,error:ue},{data:orders,error:oe},{data:tickets,error:te}]=await Promise.all([
+          sb.from("users").select("*").order("id"),
+          sb.from("orders").select("*").order("id"),
+          sb.from("tickets").select("*").order("id")
+        ]);
+        if(ue||oe||te)console.warn("Supabase load errors",ue,oe,te);
+        dispatch({type:"LOAD_DATA",users:users||[],orders:orders||[],tickets:tickets||[]});
+      }catch(e){console.warn("Supabase unavailable, using local state",e);}
+      setLoading(false);
+    })();
+  },[]);
+
+  /* syncDispatch — updates local state AND persists to Supabase */
+  const syncDispatch=useCallback(async(action)=>{
+    const s=stateRef.current;
+    dispatch(action);
+    try{
+      switch(action.type){
+        case"REGISTER":{
+          const u={id:s.nextUserId,...action.user,role:"client",createdAt:new Date().toISOString()};
+          await sb.from("users").upsert(u);break;
+        }
+        case"ADMIN_CREATE_USER":{
+          const u={id:s.nextUserId,...action.user,createdAt:new Date().toISOString()};
+          await sb.from("users").upsert(u);break;
+        }
+        case"TOGGLE_ADMIN":{
+          const usr=s.users.find(u=>u.id===action.id);
+          if(usr)await sb.from("users").update({role:usr.role==="admin"?"client":"admin"}).eq("id",action.id);
+          break;
+        }
+        case"CREATE_ORDER":{
+          const num="PF-"+String(s.nextOrderId).padStart(4,"0");
+          const o={id:s.nextOrderId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...action.order,files:[],status:action.order.needsQuote?"Orçamento":"Novo",createdAt:new Date().toISOString(),deliveryLink:"",htmlCode:"",internalNote:"",quote:"",quoteStatus:"",assigneeId:null};
+          await sb.from("orders").upsert(o);break;
+        }
+        case"UPDATE_ORDER":
+          await sb.from("orders").update(action.updates).eq("id",action.id);break;
+        case"RESPOND_QUOTE":
+          await sb.from("orders").update({quoteStatus:action.response}).eq("id",action.id);break;
+        case"CREATE_TICKET":{
+          const num="TK-"+String(s.nextTicketId).padStart(4,"0");
+          const t={id:s.nextTicketId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...action.ticket,status:"Aberto",response:"",createdAt:new Date().toISOString()};
+          await sb.from("tickets").upsert(t);break;
+        }
+        case"RESPOND_TICKET":
+          await sb.from("tickets").update({response:action.response,status:"Respondido"}).eq("id",action.id);break;
+      }
+    }catch(e){console.warn("Supabase sync failed",e);}
+  },[]);
+
+  if(loading)return(
+    <div style={{minHeight:"100vh",background:"#faf9f6",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{width:52,height:52,borderRadius:"50%",border:"3px solid #e2e8f0",borderTop:"3px solid #f59e0b",animation:"spin 0.9s linear infinite"}}/>
+      <span style={{color:"#94a3b8",fontSize:14,fontWeight:600,letterSpacing:".02em"}}>Carregando PageFlash...</span>
+    </div>
+  );
+  if(!state.currentUser)return<Auth state={state} dispatch={syncDispatch}/>;
+  if(state.isAdmin&&!viewAsClient)return<AdminPanel state={state} dispatch={syncDispatch} onViewAsClient={()=>setViewAsClient(true)}/>;
+  return<ClientPanel state={state} dispatch={syncDispatch} onBackToAdmin={state.isAdmin?()=>setViewAsClient(false):null}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
