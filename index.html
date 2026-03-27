@@ -1464,24 +1464,47 @@ function App(){
         }
         case"CREATE_ORDER":{
           const num="PF-"+String(s.nextOrderId).padStart(4,"0");
-          const o={id:s.nextOrderId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...action.order,files:[],status:action.order.needsQuote?"Orçamento":"Novo",createdAt:new Date().toISOString(),deliveryLink:"",htmlCode:"",internalNote:"",quote:"",quoteStatus:"",assigneeId:null};
-          await sb.from("orders").upsert(o);break;
+          // strip 'name' e 'files' — não existem como colunas na tabela orders
+          const{name:_n,files:_f,...orderFields}=action.order;
+          const o={id:s.nextOrderId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...orderFields,files:[],status:action.order.needsQuote?"Orçamento":"Novo",createdAt:new Date().toISOString(),deliveryLink:"",htmlCode:"",internalNote:"",quote:"",quoteStatus:"",assigneeId:null};
+          const{error:e1}=await sb.from("orders").upsert(o);
+          if(e1)console.error("Supabase CREATE_ORDER:",e1);
+          break;
         }
-        case"UPDATE_ORDER":
-          await sb.from("orders").update(action.updates).eq("id",action.id);break;
-        case"RESPOND_QUOTE":
-          await sb.from("orders").update({quoteStatus:action.response}).eq("id",action.id);break;
+        case"UPDATE_ORDER":{
+          // strip 'files' de updates para não mandar base64 pro banco
+          const{files:_f,...safeUpdates}=action.updates||{};
+          const{error:e2}=await sb.from("orders").update(safeUpdates).eq("id",action.id);
+          if(e2)console.error("Supabase UPDATE_ORDER:",e2);
+          break;
+        }
+        case"RESPOND_QUOTE":{
+          const{error:e3}=await sb.from("orders").update({quoteStatus:action.response}).eq("id",action.id);
+          if(e3)console.error("Supabase RESPOND_QUOTE:",e3);
+          break;
+        }
         case"CREATE_TICKET":{
           const num="TK-"+String(s.nextTicketId).padStart(4,"0");
           const t={id:s.nextTicketId,number:num,clientId:s.currentUser.id,clientName:s.currentUser.name,...action.ticket,status:"Aberto",response:"",createdAt:new Date().toISOString()};
-          await sb.from("tickets").upsert(t);break;
+          const{error:e4}=await sb.from("tickets").upsert(t);
+          if(e4)console.error("Supabase CREATE_TICKET:",e4);
+          break;
         }
-        case"RESPOND_TICKET":
-          await sb.from("tickets").update({response:action.response,status:"Respondido"}).eq("id",action.id);break;
-        case"DELETE_USER":
-          await sb.from("users").delete().eq("id",action.id);break;
-        case"UPDATE_PASSWORD":
-          await sb.from("users").update({password:action.password}).eq("id",action.id);break;
+        case"RESPOND_TICKET":{
+          const{error:e5}=await sb.from("tickets").update({response:action.response,status:"Respondido"}).eq("id",action.id);
+          if(e5)console.error("Supabase RESPOND_TICKET:",e5);
+          break;
+        }
+        case"DELETE_USER":{
+          const{error:e6}=await sb.from("users").delete().eq("id",action.id);
+          if(e6)console.error("Supabase DELETE_USER:",e6);
+          break;
+        }
+        case"UPDATE_PASSWORD":{
+          const{error:e7}=await sb.from("users").update({password:action.password}).eq("id",action.id);
+          if(e7)console.error("Supabase UPDATE_PASSWORD:",e7);
+          break;
+        }
       }
     }catch(e){console.warn("Supabase sync failed",e);}
   },[]);
